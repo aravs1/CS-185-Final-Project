@@ -24,7 +24,6 @@ def compute_per_token_logprobs(
         logits = out.logits
         B, L, V = logits.shape
 
-        # logits_shifted = logits[:, :-1, :]
         logits_shifted = logits[:, :-1, :].reshape(-1, V)
         targets = input_ids[:, 1:].reshape(-1)
 
@@ -44,11 +43,14 @@ def build_completion_mask(
     del pad_token_id
     # TODO(student): build a float mask of shape [B, L-1] that selects only completion tokens.
     # Be careful about the one-token shift between logits[:, :-1] and input_ids[:, 1:].
-    token_idx = torch.arange(input_ids.shape[1]-1, device=input_ids.device).unsqueeze(0)
-    mask = (token_idx >= prompt_input_len).float()
 
-    valid_target = attention_mask[:, 1:].float()
-    return mask * valid_target
+    B, L = input_ids.shape
+
+    mask = torch.zeros(B, L - 1, dtype=torch.float, device=input_ids.device)
+    mask[:, prompt_input_len - 1:] = 1.0
+    mask = mask * attention_mask[:, 1:].float()
+
+    return mask
 
 def masked_sum(x: torch.Tensor, mask: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
     return (x * mask).sum(dim=1) / (mask.sum(dim=1) + eps)
@@ -76,4 +78,8 @@ def approx_kl_from_logprobs(
     del eps, log_ratio_clip
     # TODO(student): implement the sampled-token KL proxy used throughout the codebase.
     # You should mask out non-completion positions and return a scalar batch mean.
-    raise NotImplementedError("Implement approx_kl_from_logprobs in the student starter.")
+
+    delta = torch.clamp(ref_logprobs - new_logprobs, min=-log_ratio_clip, max=log_ratio_clip)
+    per_token = torch.exp(delta) - delta - 1
+
+    return masked_mean(per_token, mask, eps=eps)
