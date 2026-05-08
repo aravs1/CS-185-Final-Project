@@ -102,10 +102,10 @@ def compute_offline_preference_loss(
         logits = policy_margin_sum - ref_margin_sum
         target_gap = 1.0 / (2.0 * beta)
         # TODO(student): implement the squared IPO target-gap objective.
-        losses = torch.empty_like(policy_margin_sum)
+        losses = (logits - target_gap) ** 2
         metrics.update(
             {
-                "preference/reference_margin_sum_mean": float(ref_margin_sum.detach().mean().item()),
+                "preference/reference_margisn_sum_mean": float(ref_margin_sum.detach().mean().item()),
                 "preference/reference_corrected_margin_mean": float(logits.detach().mean().item()),
                 "preference/ipo_target_gap": float(target_gap),
             }
@@ -114,6 +114,7 @@ def compute_offline_preference_loss(
         if reference_scores is None:
             raise ValueError("AOT requires reference scores.")
         # TODO(student): convert policy/reference scores into chosen and rejected rewards,
+
         # sort both reward vectors, and apply a DPO-style logistic loss to the quantile gaps.
         chosen_rewards = torch.empty_like(policy_scores.chosen_logp_sum)
         rejected_rewards = torch.empty_like(policy_scores.rejected_logp_sum)
@@ -138,7 +139,7 @@ def compute_offline_preference_loss(
         weights = example_weights.to(losses.device, dtype=losses.dtype).clamp_min(1e-6)
         if losses.shape != weights.shape:
             raise ValueError(
-                f"example_weights shape {tuple(weights.shape)} is incompatible with losses shape {tuple(losses.shape)}"
+                f"example_weights shape {tuple(weights.shape)} is incompatible with losses shape {tuple(losses.git shape)}"
             )
         weighted_loss = (losses * weights).sum() / weights.sum()
         metrics["preference/example_weight_mean"] = float(weights.detach().mean().item())
