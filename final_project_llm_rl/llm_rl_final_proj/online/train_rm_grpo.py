@@ -213,15 +213,18 @@ def _compute_group_advantages(
     # into prompt-wise batches of size `group_size`, subtracting the group mean, and optionally
     # dividing by the group standard deviation when `divide_by_std=True`.
     grouped_rewards = rewards.view(-1, group_size)
-    # mean along the second dimension
     group_mean = grouped_rewards.mean(dim=1, keepdim=True)
-    # advantages shape =  (X, group_size)
+
+    # Advantages have shape (X, group_size)
     advantages = grouped_rewards - group_mean
+
     if divide_by_std:
-        advantages = advantages / (grouped_rewards.std(dim=1, keepdim=True) + eps)
+        # divide by the std of rewards within each group, with an eps for numerical stability
+        group_std = grouped_rewards.std(dim=1, keepdim=True, unbiased=False)
+        advantages = advantages / (group_std + eps)
     
-    # flatten back the advantages to shape (X * group_size,)
     return advantages.view(-1)
+
 
 
 
