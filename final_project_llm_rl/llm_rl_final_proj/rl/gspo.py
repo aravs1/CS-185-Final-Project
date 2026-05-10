@@ -50,7 +50,7 @@ class GSPO(RLAlgorithm):
         trainable_params = [p for p in model.parameters() if p.requires_grad]
 
         optimizer.zero_grad(set_to_none=True)
-        rng = torch.Generator(device=rollout.input_ids.device)
+        rng = torch.Generator(device="cpu")
         rng.manual_seed(self._next_update_seed())
 
         for _ in range(cfg.ppo_epochs):
