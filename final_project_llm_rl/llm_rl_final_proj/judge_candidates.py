@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from dotenv import load_dotenv
+load_dotenv()
+import os
+#api_key = os.getenv("OPENAI_API_KEY").strip()
+
 import argparse
 import concurrent.futures
 import hashlib
