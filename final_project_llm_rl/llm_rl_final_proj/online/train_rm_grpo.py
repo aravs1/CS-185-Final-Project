@@ -24,6 +24,7 @@ from llm_rl_final_proj.rl.base import AlgoConfig
 from llm_rl_final_proj.rl.dr_grpo import DrGRPO
 from llm_rl_final_proj.rl.gspo import GSPO
 from llm_rl_final_proj.rl.grpo import GRPO
+from llm_rl_final_proj.rl.remax_grpo import ReMaxGRPO
 from llm_rl_final_proj.rl.reinforce import Reinforce
 from llm_rl_final_proj.rollout.hf_sampler import HFSampler, SamplingConfig
 from llm_rl_final_proj.rollout.rollout_buffer import RolloutBatch
@@ -109,7 +110,7 @@ def parse_args() -> OnlineRMGRPOConfig:
         "--algo",
         type=str,
         default=OnlineRMGRPOConfig.algo,
-        choices=["grpo", "dr_grpo", "gspo"],
+        choices=["grpo", "dr_grpo", "gspo", "remax"],
     )
     ap.add_argument("--model_name", type=str, default=OnlineRMGRPOConfig.model_name)
     ap.add_argument("--reward_model_name", type=str, default=OnlineRMGRPOConfig.reward_model_name)
@@ -209,6 +210,7 @@ def _compute_group_advantages(
     *,
     divide_by_std: bool,
 ) -> torch.Tensor:
+    del eps
     # TODO(student): compute one scalar advantage per sampled completion by grouping rewards
     # into prompt-wise batches of size `group_size`, subtracting the group mean, and optionally
     # dividing by the group standard deviation when `divide_by_std=True`.
@@ -245,6 +247,8 @@ def _build_online_algo(cfg: OnlineRMGRPOConfig):
         return DrGRPO(algo_cfg)
     if cfg.algo == "gspo":
         return GSPO(algo_cfg)
+    if cfg.algo == "remax":
+        return ReMaxGRPO(algo_cfg)
     raise ValueError(f"Unsupported --algo {cfg.algo}")
 
 
@@ -572,11 +576,53 @@ def main() -> None:
             device=device,
         )
         rewards = torch.tensor(reward_scores, device=device, dtype=torch.float32)
-        advantages = _compute_group_advantages(
-            rewards,
-            cfg.group_size,
-            divide_by_std=_algo_divides_advantages_by_std(cfg.algo),
-        )
+        if cfg.algo == "remax":
+            greedy_sampling_cfg = SamplingConfig(
+                min_new_tokens=cfg.min_new_tokens,
+                max_new_tokens=cfg.max_new_tokens,
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                repetition_penalty=cfg.repetition_penalty,
+                do_sample=False,
+            )
+            with torch.no_grad():
+                greedy_rollout = sampler.rollout(
+                    policy_model=policy_model,
+                    prompt_messages=[ex.prompt_messages for ex in prompt_batch],
+                    task_names=["synthetic_instruction_following"] * len(prompt_batch),
+                    task_metas=[{"row_id": ex.row_id, "prompt_text": ex.prompt_text} for ex in prompt_batch],
+                    group_size=1,
+                    sampling=greedy_sampling_cfg,
+                    max_prompt_tokens=cfg.max_prompt_tokens,
+                    output_to_cpu=False,
+                )
+            greedy_reward_rows = [
+                {
+                    "row_id": f"{prompt_batch[i].row_id}:greedy",
+                    "prompt_messages": greedy_rollout.prompt_messages[i],
+                    "prompt_text": str(prompt_batch[i].prompt_text),
+                    "response_text": _normalize_completion_for_reward_scoring(greedy_rollout.completion_texts[i]),
+                }
+                for i in range(len(prompt_batch))
+            ]
+            greedy_scores = score_prompt_response_pairs(
+                reward_model,
+                reward_tokenizer,
+                greedy_reward_rows,
+                max_prompt_tokens=cfg.max_prompt_tokens,
+                max_response_tokens=cfg.max_response_tokens,
+                per_device_batch_size=cfg.reward_batch_size,
+                device=device,
+            )
+            baseline = torch.tensor(greedy_scores, device=device, dtype=torch.float32)
+            advantages = rewards - baseline.repeat_interleave(cfg.group_size)
+        else:
+            advantages = _compute_group_advantages(
+                rewards,
+                cfg.group_size,
+                divide_by_std=_algo_divides_advantages_by_std(cfg.algo),
+            )
         batch = RolloutBatch(
             input_ids=rollout.input_ids,
             attention_mask=rollout.attention_mask,
